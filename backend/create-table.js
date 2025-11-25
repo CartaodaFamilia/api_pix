@@ -12,7 +12,7 @@ async function createTable() {
     await pool.query('TRUNCATE TABLE clientes RESTART IDENTITY CASCADE;');
     console.log('✅ Tabela clientes limpa.');
     // -------------------------------------
-    
+
     await pool.query(`
       CREATE TABLE IF NOT EXISTS clientes (
         id SERIAL PRIMARY KEY,
@@ -25,16 +25,6 @@ async function createTable() {
     `);
     
     console.log('✅ Tabela clientes criada/verificada');
-    
-    // Inserir dados de teste
-    await pool.query(`
-      INSERT INTO clientes (name, email, cpf, phone) VALUES 
-      ('João Silva', 'joao@email.com', '123.456.789-00', '(11) 99999-9999'),
-      ('Maria Santos', 'maria@email.com', '987.654.321-00', '(11) 88888-8888')
-      ON CONFLICT DO NOTHING;
-    `);
-    
-    console.log('✅ Dados de teste inseridos');
     
     // Verificar
     const result = await pool.query('SELECT * FROM clientes');
