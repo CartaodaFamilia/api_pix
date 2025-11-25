@@ -229,21 +229,21 @@ export default function RecorrenciasPage() {
           </table>
         </div>
 
-        {/* Modal */}
+   {/* Modal */}
         {showModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 overflow-y-auto">
-            <div className="bg-white rounded-lg p-8 max-w-md w-full my-8">
-              <h2 className="text-2xl font-bold text-gray-900 mb-6">
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 overflow-y-auto p-4">
+            <div className="bg-white rounded-lg p-6 max-w-lg w-full my-4 max-h-[90vh] overflow-y-auto">
+              <h2 className="text-xl font-bold text-gray-900 mb-4">
                 {clienteSelecionado ? `Recorrência para ${clienteSelecionado.name}` : 'Nova Recorrência'}
               </h2>
               
-              <form onSubmit={handleSubmit} className="space-y-4">
+              <form onSubmit={handleSubmit} className="space-y-3">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Cliente</label>
                   <select
                     value={formData.clienteId}
                     onChange={(e) => handleSelectCliente(e.target.value)}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
                     required
                     disabled={creating}
                   >
@@ -262,7 +262,7 @@ export default function RecorrenciasPage() {
                     type="text"
                     value={formData.descricao}
                     onChange={(e) => setFormData({ ...formData, descricao: e.target.value })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
                     required
                     disabled={creating}
                   />
@@ -275,7 +275,7 @@ export default function RecorrenciasPage() {
                     placeholder="0,00"
                     value={formData.valor}
                     onChange={(e) => setFormData({ ...formData, valor: e.target.value })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
                     required
                     disabled={creating}
                   />
@@ -286,7 +286,7 @@ export default function RecorrenciasPage() {
                   <select
                     value={formData.periodicidade}
                     onChange={(e) => setFormData({ ...formData, periodicidade: e.target.value })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
                     required
                     disabled={creating}
                   >
@@ -303,7 +303,7 @@ export default function RecorrenciasPage() {
                   <select
                     value={formData.jornada}
                     onChange={(e) => setFormData({ ...formData, jornada: e.target.value })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
                     required
                     disabled={creating}
                   >
@@ -314,8 +314,8 @@ export default function RecorrenciasPage() {
                 </div>
 
                 {formData.jornada && (
-                  <div className="bg-blue-50 border-l-4 border-blue-400 p-3 mt-2 rounded">
-                    <p className="text-sm text-blue-800">
+                  <div className="bg-blue-50 border-l-4 border-blue-400 p-2 mt-2 rounded">
+                    <p className="text-xs text-blue-800">
                       {jornadaDescriptions[formData.jornada]}
                     </p>
                   </div>
@@ -330,7 +330,7 @@ export default function RecorrenciasPage() {
                       type="date"
                       value={formData.dataVencimento}
                       onChange={(e) => setFormData({ ...formData, dataVencimento: e.target.value })}
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
                       disabled={creating}
                     />
                     <p className="text-xs text-gray-500 mt-1">
@@ -339,18 +339,18 @@ export default function RecorrenciasPage() {
                   </div>
                 )}
 
-                <div className="flex justify-end gap-4 pt-4">
+                <div className="flex justify-end gap-3 pt-3 border-t border-gray-200 mt-4">
                   <button
                     type="button"
                     onClick={() => setShowModal(false)}
-                    className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
+                    className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 text-sm"
                     disabled={creating}
                   >
                     Cancelar
                   </button>
                   <button
                     type="submit"
-                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:bg-gray-400"
+                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:bg-gray-400 text-sm"
                     disabled={creating}
                   >
                     {creating ? 'Criando...' : 'Criar Recorrência'}
