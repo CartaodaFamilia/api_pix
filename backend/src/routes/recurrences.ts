@@ -3,7 +3,12 @@ import { z } from 'zod';
 import { db } from '../lib/db';
 import { sql } from 'drizzle-orm';
 import { recurrences } from '../models/schema';
-import { createSantanderRecurrence } from '../lib/santander';
+import { 
+  createSantanderRecurrence, 
+  createLocation, 
+  createRecurringCharge,
+  getQrCodePayload 
+} from '../lib/santander';
 
 // Esquema de validação para a criação de recorrência
 const createRecurrenceSchema = z.object({
@@ -29,6 +34,13 @@ const createRecurrenceSchema = z.object({
   convenio: z.string().optional(), // Número do convênio (opcional)
   // Campos adicionais para o frontend
   jornada: z.string(), // Jornada de Pagamento (jornada2, jornada3, jornada4)
+  // Campos para Jornada 3 e 4 (cobrança)
+  dataVencimento: z.string().optional(), // Data de vencimento (para Jornada 4)
+  cep: z.string().optional(),
+  cidade: z.string().optional(),
+  email: z.string().optional(),
+  logradouro: z.string().optional(),
+  uf: z.string().optional(),
 });
 
 export const recurrencesRouter = router({
@@ -36,41 +48,99 @@ export const recurrencesRouter = router({
     .input(createRecurrenceSchema)
     .mutation(async ({ input }) => {
       try {
-        // 1. Preparar payload para a API do Santander
-        const santanderPayload = {
+        let locationId: number | null = null;
+        let qrCodePayload: string | null = null;
+
+        // PASSO 1: Criar location para Jornadas 2, 3 e 4
+        if (input.jornada === 'jornada2' || input.jornada === 'jornada3' || input.jornada === 'jornada4') {
+          console.log(`📍 Criando location para ${input.jornada}...`);
+          const locationResponse = await createLocation();
+          locationId = locationResponse.id;
+          console.log(`✅ Location criada: ${locationId}`);
+        }
+
+        // PASSO 2: Preparar payload para criar recorrência
+        const santanderPayload: any = {
           vinculo: {
             contrato: input.contract,
             devedor: {
               cpfCnpj: input.cpfCnpj,
               nome: input.name,
             },
-            objeto: input.description,
+            objeto: input.description || 'Recorrência PIX Automático',
           },
           calendario: {
             dataInicial: input.dataInicial,
-            dataFinal: input.endDate, // Opcional
+            dataFinal: input.endDate,
             periodicidade: input.periodicidade,
           },
           valor: {
-            valorRec: input.valorRec, // Opcional
-            valorMinimoRecebedor: input.valorMinimoRecebedor, // Opcional
+            valorRec: input.valorRec?.toString(),
+            valorMinimoRecebedor: input.valorMinimoRecebedor?.toString(),
           },
           politicaRetentativa: input.politicaRetentativa,
-          loc: {
-            id: input.locId, // Opcional
-            ativacao: input.ativacao,
-          },
-          dadosJornada: input.dadosJornada, // Opcional
-          txid: input.txid, // Opcional
-          convenio: input.convenio, // Opcional
+          convenio: input.convenio,
         };
 
-        // 2. Chamar a API do Santander para criar a recorrência
+        // Adicionar location se foi criada
+        if (locationId) {
+          santanderPayload.loc = locationId;
+        }
+
+        // PASSO 3: Criar recorrência no Santander
+        console.log('🚀 Criando recorrência no Santander...');
         const santanderResponse = await createSantanderRecurrence(santanderPayload);
         const santanderRecurrenceId = santanderResponse.idRec;
-        const locationUrl = santanderResponse.location;
-        
-        // 3. Salvar no banco de dados
+        console.log(`✅ Recorrência criada: ${santanderRecurrenceId}`);
+
+        // PASSO 4: Para Jornadas 3 e 4, criar cobrança recorrente
+        if ((input.jornada === 'jornada3' || input.jornada === 'jornada4') && locationId) {
+          console.log(`💰 Criando cobrança para ${input.jornada}...`);
+          
+          const txid = input.txid || `TXN${Date.now()}`;
+          
+          const chargePayload: any = {
+            idRec: santanderRecurrenceId,
+            infoAdicional: input.description || 'Cobrança recorrente PIX',
+            calendario: {},
+            valor: {
+              original: input.amount.toString(),
+            },
+            devedor: {
+              cpfCnpj: input.cpfCnpj,
+              nome: input.name,
+            },
+          };
+
+          // Jornada 3: Pagamento imediato (sem vencimento)
+          if (input.jornada === 'jornada3') {
+            chargePayload.calendario.dataDeVencimento = input.dataInicial;
+          }
+
+          // Jornada 4: Pagamento com vencimento futuro
+          if (input.jornada === 'jornada4' && input.dataVencimento) {
+            chargePayload.calendario.dataDeVencimento = input.dataVencimento;
+          }
+
+          // Adicionar dados opcionais do devedor
+          if (input.cep) chargePayload.devedor.cep = input.cep;
+          if (input.cidade) chargePayload.devedor.cidade = input.cidade;
+          if (input.email) chargePayload.devedor.email = input.email;
+          if (input.logradouro) chargePayload.devedor.logradouro = input.logradouro;
+          if (input.uf) chargePayload.devedor.uf = input.uf;
+
+          await createRecurringCharge(txid, chargePayload);
+          console.log(`✅ Cobrança criada com txid: ${txid}`);
+        }
+
+        // PASSO 5: Obter payload do QR Code
+        if (locationId) {
+          console.log('🖼️ Gerando payload do QR Code...');
+          qrCodePayload = await getQrCodePayload(locationId);
+          console.log('✅ QR Code payload gerado');
+        }
+
+        // PASSO 6: Salvar no banco de dados
         const [newRecurrence] = await db.insert(recurrences).values({
           clientId: input.clientId,
           amount: input.amount.toString(),
@@ -79,22 +149,23 @@ export const recurrencesRouter = router({
           endDate: input.endDate ? new Date(input.endDate) : null,
           status: 'PENDING_APPROVAL', // Status inicial
           santanderRecurrenceId: santanderRecurrenceId,
-          locationUrl: locationUrl,
+          locationUrl: locationId ? `${locationId}` : null,
         }).returning();
 
-        // 4. Lógica de geração de QR Code (Jornada 2, 3 ou 4)
-        let qrCodeUrl = null;
-        if (input.jornada === 'jornada2' || input.jornada === 'jornada3' || input.jornada === 'jornada4') {
-          qrCodeUrl = locationUrl;
-        }
+        console.log('✅ Recorrência salva no banco de dados');
 
         return {
+          success: true,
           recurrence: newRecurrence,
-          qrCodeUrl: qrCodeUrl,
+          qrCodePayload: qrCodePayload,
+          locationId: locationId,
+          santanderRecurrenceId: santanderRecurrenceId,
+          jornada: input.jornada,
         };
-      } catch (error) {
+
+      } catch (error: any) {
         console.error('❌ Erro ao criar recorrência:', error);
-        throw new Error('Falha ao criar recorrência.');
+        throw new Error(error.message || 'Falha ao criar recorrência.');
       }
     }),
 
@@ -186,7 +257,6 @@ export const recurrencesRouter = router({
           .where(sql`id = ${input.id}`)
           .returning();
 
-        // atualiza o timestamp em uma query separada para usar a coluna real do banco
         await db.execute(sql`UPDATE recurrences SET updated_at = ${new Date()} WHERE id = ${input.id}`);
 
         if (!updatedRecurrence) {
@@ -261,7 +331,6 @@ export const recurrencesRouter = router({
         WHERE status = 'ACTIVE'
       `);
 
-      // Converter os resultados com type safety
       const total = parseInt(String(totalResult.rows[0]?.total || '0'));
       const active = parseInt(String(activeResult.rows[0]?.active || '0'));
       const totalRevenue = parseFloat(String(revenueResult.rows[0]?.total_revenue || '0'));

@@ -3,22 +3,38 @@ import * as fs from 'fs';
 import * as https from 'https';
 import * as path from 'path';
 
-// Variáveis de ambiente (devem ser configuradas no .env ou similar )
-const SANTANDER_API_URL = process.env.SANTANDER_BASE_URL || 'https://api.santander.com.br/pix-automatico/v1';
-// Novos campos para o caminho dos certificados, lendo do .env
-const SANTANDER_CERT_PATH = process.env.SANTANDER_CERT_PATH || path.join(__dirname, '..', '..', 'certificates', 'certificate.pem' );
-const SANTANDER_KEY_PATH = process.env.SANTANDER_KEY_PATH || path.join(__dirname, '..', '..', 'certificates', 'private.key');
+// Variáveis de ambiente (devem ser configuradas no .env)
+const SANTANDER_API_URL = process.env.SANTANDER_BASE_URL || 'https://trust-pix-h.santander.com.br';
+const X_APPLICATION_KEY = process.env.X_APPLICATION_KEY || '';
+// Caminhos dos certificados
+const SANTANDER_CERT_PATH = process.env.SANTANDER_CERT_PATH || path.join(__dirname, '..', '..', 'certificados', 'certificate.pem');
+const SANTANDER_KEY_PATH = process.env.SANTANDER_KEY_PATH || path.join(__dirname, '..', '..', 'certificados', 'private.key');
 
-const CLIENT_ID = process.env.SANTANDER_CLIENT_ID || 'SEU_CLIENT_ID';
-const CLIENT_SECRET = process.env.SANTANDER_CLIENT_SECRET || 'SEU_CLIENT_SECRET';
+const CLIENT_ID = process.env.SANTANDER_CLIENT_ID || '';
+const CLIENT_SECRET = process.env.SANTANDER_CLIENT_SECRET || '';
 
 // Variável para armazenar o token e sua expiração
 let accessToken: string | null = null;
 let tokenExpiry: number = 0;
 
 /**
+ * Cria agente HTTPS com mTLS
+ */
+function createHttpsAgent(): https.Agent {
+  try {
+    return new https.Agent({
+      cert: fs.readFileSync(SANTANDER_CERT_PATH),
+      key: fs.readFileSync(SANTANDER_KEY_PATH),
+      rejectUnauthorized: false, // Para ambiente de homologação/sandbox
+    });
+  } catch (error) {
+    console.warn('⚠️ Certificados não encontrados, usando conexão sem mTLS');
+    return new https.Agent({ rejectUnauthorized: false });
+  }
+}
+
+/**
  * Obtém o token de acesso OAuth 2.0 do Santander.
- * @returns O token de acesso.
  */
 async function getAccessToken(): Promise<string> {
   // Verifica se o token ainda é válido (com margem de 60 segundos)
@@ -27,119 +43,185 @@ async function getAccessToken(): Promise<string> {
   }
 
   console.log('🔑 Obtendo novo token de acesso do Santander...');
-  
-  const authString = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
-  
+
   try {
-    // Configuração do agente HTTPS com mTLS
-    const httpsAgent = new https.Agent({
-      cert: fs.readFileSync(SANTANDER_CERT_PATH ),
-      key: fs.readFileSync(SANTANDER_KEY_PATH),
-      rejectUnauthorized: false, // Pode ser necessário para sandbox/testes
-    });
+    const httpsAgent = createHttpsAgent();
 
     const response = await axios.post(
-      `${SANTANDER_API_URL}/oauth/token`, // Endpoint de token (pode variar, verificar documentação)
-      'grant_type=client_credentials',
+      `${SANTANDER_API_URL}/auth/oauth/v2/token`,
+      new URLSearchParams({
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
+        grant_type: 'client_credentials',
+      }),
       {
         httpsAgent,
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
-          'Authorization': `Basic ${authString}`,
         },
       }
-     );
+    );
 
     accessToken = response.data.access_token;
-    // A API retorna expiresIn em segundos, convertemos para milissegundos e adicionamos ao tempo atual
-    tokenExpiry = Date.now() + (response.data.expires_in * 1000); 
-    
+    tokenExpiry = Date.now() + (response.data.expires_in * 1000);
+
     console.log('✅ Token obtido com sucesso.');
     return accessToken as string;
 
-  } catch (error) {
-    console.error('❌ Erro ao obter token do Santander:', (error as any).response?.data || error);
+  } catch (error: any) {
+    console.error('❌ Erro ao obter token do Santander:', error.response?.data || error.message);
     throw new Error('Falha ao autenticar com a API do Santander.');
   }
 }
 
 /**
+ * Cria uma location para QR Code (necessário para Jornadas 2, 3 e 4)
+ */
+export async function createLocation(): Promise<any> {
+  const token = await getAccessToken();
+
+  try {
+    console.log('📍 Criando location no Santander...');
+
+    const httpsAgent = createHttpsAgent();
+
+    const response = await axios.post(
+      `${SANTANDER_API_URL}/api/v1/locrec`,
+      {}, // Body vazio conforme documentação
+      {
+        httpsAgent,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+          'x-application-key': X_APPLICATION_KEY,
+        },
+      }
+    );
+
+    console.log('✅ Location criada:', response.data);
+    return response.data;
+
+  } catch (error: any) {
+    console.error('❌ Erro ao criar location:', error.response?.data || error.message);
+    throw new Error('Falha ao criar location no Santander.');
+  }
+}
+
+/**
  * Cria uma nova recorrência na API do Santander.
- * @param recurrenceData Os dados da recorrência conforme a documentação do Santander.
- * @returns A resposta da API do Santander.
  */
 export async function createSantanderRecurrence(recurrenceData: any): Promise<any> {
   const token = await getAccessToken();
-  
+
   try {
     console.log('🚀 Enviando solicitação de criação de recorrência para o Santander...');
-    
-    // Configuração do agente HTTPS com mTLS
-    const httpsAgent = new https.Agent({
-      cert: fs.readFileSync(SANTANDER_CERT_PATH ),
-      key: fs.readFileSync(SANTANDER_KEY_PATH),
-      rejectUnauthorized: false, // Pode ser necessário para sandbox/testes
-    });
+
+    const httpsAgent = createHttpsAgent();
 
     const response = await axios.post(
-      `${SANTANDER_API_URL}/rec`, // Endpoint de criação de recorrência
+      `${SANTANDER_API_URL}/api/v1/rec`,
       recurrenceData,
       {
         httpsAgent,
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
+          'x-application-key': X_APPLICATION_KEY,
         },
       }
-     );
+    );
 
     console.log('✅ Recorrência criada no Santander:', response.data);
     return response.data;
 
-  } catch (error) {
-    console.error('❌ Erro ao criar recorrência no Santander:', (error as any).response?.data || error);
+  } catch (error: any) {
+    console.error('❌ Erro ao criar recorrência no Santander:', error.response?.data || error.message);
     throw new Error('Falha ao criar recorrência no Santander.');
   }
 }
 
 /**
- * Gera o QR Code para uma recorrência.
- * A documentação sugere que o QR Code é retornado na criação da recorrência (location).
- * No entanto, se for necessário um endpoint separado, ele seria implementado aqui.
- * Por enquanto, vamos focar no retorno da criação da recorrência.
+ * Cria uma cobrança recorrente (para Jornadas 3 e 4)
  */
-export async function getQrCode(locationUrl: string): Promise<string> {
+export async function createRecurringCharge(txid: string, chargeData: any): Promise<any> {
   const token = await getAccessToken();
-  
+
   try {
-    console.log('🖼️ Buscando QR Code...');
-    
-    // A documentação sugere que a URL de location contém o QR Code ou a informação para gerá-lo.
-    // Vamos assumir que a URL de location é o endpoint para obter o payload do QR Code.
-    // Configuração do agente HTTPS com mTLS
-    const httpsAgent = new https.Agent({
-      cert: fs.readFileSync(SANTANDER_CERT_PATH ),
-      key: fs.readFileSync(SANTANDER_KEY_PATH),
-      rejectUnauthorized: false, // Pode ser necessário para sandbox/testes
-    });
+    console.log('💰 Criando cobrança recorrente no Santander...');
+
+    const httpsAgent = createHttpsAgent();
+
+    const response = await axios.put(
+      `${SANTANDER_API_URL}/api/v1/cobr/${txid}`,
+      chargeData,
+      {
+        httpsAgent,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+          'x-application-key': X_APPLICATION_KEY,
+        },
+      }
+    );
+
+    console.log('✅ Cobrança recorrente criada:', response.data);
+    return response.data;
+
+  } catch (error: any) {
+    console.error('❌ Erro ao criar cobrança recorrente:', error.response?.data || error.message);
+    throw new Error('Falha ao criar cobrança recorrente no Santander.');
+  }
+}
+
+/**
+ * Recupera informações de uma location (inclui dados do QR Code)
+ */
+export async function getLocationById(locationId: number): Promise<any> {
+  const token = await getAccessToken();
+
+  try {
+    console.log('🔍 Recuperando location do Santander...');
+
+    const httpsAgent = createHttpsAgent();
 
     const response = await axios.get(
-      locationUrl,
+      `${SANTANDER_API_URL}/api/v1/locrec/${locationId}`,
       {
         httpsAgent,
         headers: {
           'Authorization': `Bearer ${token}`,
+          'x-application-key': X_APPLICATION_KEY,
         },
       }
-     );
+    );
 
-    // O payload do QR Code (copia e cola) é o campo 'location' ou 'qrcode' na resposta.
-    // O QR Code em si (imagem) pode ser gerado a partir do payload.
-    // Vamos retornar o payload para ser usado no frontend.
-    return response.data.qrcode_payload || response.data.location; 
+    console.log('✅ Location recuperada:', response.data);
+    return response.data;
 
-  } catch (error) {
-    console.error('❌ Erro ao buscar QR Code:', (error as any).response?.data || error);
-    throw new Error('Falha ao buscar QR Code.');
+  } catch (error: any) {
+    console.error('❌ Erro ao recuperar location:', error.response?.data || error.message);
+    throw new Error('Falha ao recuperar location do Santander.');
+  }
+}
+
+/**
+ * Gera o payload do QR Code a partir da location
+ */
+export async function getQrCodePayload(locationId: number): Promise<string> {
+  try {
+    const locationData = await getLocationById(locationId);
+    
+    // O payload do QR Code PIX está no campo 'location' ou 'pixCopiaECola'
+    const qrCodePayload = locationData.pixCopiaECola || locationData.location || '';
+    
+    if (!qrCodePayload) {
+      throw new Error('QR Code payload não encontrado na location.');
+    }
+
+    return qrCodePayload;
+
+  } catch (error: any) {
+    console.error('❌ Erro ao gerar payload do QR Code:', error.message);
+    throw new Error('Falha ao gerar payload do QR Code.');
   }
 }

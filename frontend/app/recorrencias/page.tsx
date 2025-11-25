@@ -3,13 +3,15 @@
 import { useEffect, useState } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { Plus } from 'lucide-react';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 
 export default function RecorrenciasPage() {
+  const router = useRouter();
   const [recorrencias, setRecorrencias] = useState<any[]>([]);
   const [clientes, setClientes] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [creating, setCreating] = useState(false);
 
   const getInitialFormData = () => ({
     clienteId: '',
@@ -17,13 +19,15 @@ export default function RecorrenciasPage() {
     valor: '',
     periodicidade: 'MENSAL',
     jornada: 'jornada2',
-    // Campos Santander com valores padrão ou automáticos
-    contract: 'CONTRATO_PADRAO_001', // Pode ser um valor fixo ou vir de uma configuração
-    cpfCnpj: '', // Será preenchido ao selecionar o cliente
-    name: '', // Será preenchido ao selecionar o cliente
+    // Campos Santander com valores padrão
+    contract: 'CONTRATO_PADRAO_001',
+    cpfCnpj: '',
+    name: '',
     dataInicial: new Date().toISOString().split('T')[0],
-    politicaRetentativa: 'NAO_PERMITE', // Valor padrão
-    ativacao: true, // Valor padrão
+    politicaRetentativa: 'NAO_PERMITE',
+    ativacao: true,
+    // Campos opcionais para Jornada 4
+    dataVencimento: '',
   });
 
   const [formData, setFormData] = useState(getInitialFormData());
@@ -86,39 +90,70 @@ export default function RecorrenciasPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setCreating(true);
+
     try {
+      // Calcular data de vencimento se for Jornada 4 e não foi informada
+      let dataVencimento = formData.dataVencimento;
+      if (formData.jornada === 'jornada4' && !dataVencimento) {
+        const dataInicial = new Date(formData.dataInicial);
+        dataInicial.setDate(dataInicial.getDate() + 30); // 30 dias após data inicial
+        dataVencimento = dataInicial.toISOString().split('T')[0];
+      }
+
+      const payload = {
+        clientId: parseInt(formData.clienteId),
+        amount: parseFloat(formData.valor.replace(',', '.')),
+        valorRec: parseFloat(formData.valor.replace(',', '.')),
+        frequency: formData.periodicidade,
+        startDate: formData.dataInicial,
+        description: formData.descricao,
+        contract: formData.contract,
+        cpfCnpj: formData.cpfCnpj,
+        name: formData.name,
+        dataInicial: formData.dataInicial,
+        periodicidade: formData.periodicidade,
+        politicaRetentativa: formData.politicaRetentativa,
+        ativacao: formData.ativacao,
+        jornada: formData.jornada,
+        dataVencimento: dataVencimento,
+      };
+
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/trpc/recurrences.create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...formData,
-          clientId: parseInt(formData.clienteId),
-          amount: parseFloat(formData.valor.replace(',', '.')),
-          valorRec: parseFloat(formData.valor.replace(',', '.')),
-          frequency: formData.periodicidade,
-          startDate: formData.dataInicial,
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (response.ok) {
         const result = await response.json();
-        const qrCodeUrl = result.result?.data?.qrCodeUrl;
+        const data = result.result?.data;
 
-        if (qrCodeUrl) {
-          alert(`Recorrência criada! URL do QR Code: ${qrCodeUrl}`);
+        if (data?.qrCodePayload) {
+          // Redirecionar para página de QR Code
+          const params = new URLSearchParams({
+            payload: encodeURIComponent(data.qrCodePayload),
+            jornada: data.jornada,
+            recurrenceId: data.recurrence.id.toString(),
+            santanderRecurrenceId: data.santanderRecurrenceId || '',
+          });
+          
+          router.push(`/recorrencias/qrcode?${params.toString()}`);
         } else {
           alert('Recorrência criada com sucesso!');
+          setShowModal(false);
+          setFormData(getInitialFormData());
+          fetchRecorrencias();
         }
-
-        setShowModal(false);
-        setFormData(getInitialFormData());
-        fetchRecorrencias();
       } else {
         const errorData = await response.json();
-        alert(`Erro: ${errorData.error.message}`);
+        alert(`Erro: ${errorData.error?.message || 'Erro ao criar recorrência'}`);
       }
     } catch (error) {
       console.error('Erro ao criar recorrência:', error);
+      alert('Erro ao criar recorrência. Verifique o console para mais detalhes.');
+    } finally {
+      setCreating(false);
     }
   };
 
@@ -144,7 +179,7 @@ export default function RecorrenciasPage() {
           </div>
           <button
             onClick={() => {
-              setFormData(getInitialFormData()); // Reseta o formulário ao abrir
+              setFormData(getInitialFormData());
               setShowModal(true);
             }}
             className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700"
@@ -194,10 +229,10 @@ export default function RecorrenciasPage() {
           </table>
         </div>
 
-        {/* Modal Simplificado e Inteligente */}
+        {/* Modal */}
         {showModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-lg p-8 max-w-md w-full">
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 overflow-y-auto">
+            <div className="bg-white rounded-lg p-8 max-w-md w-full my-8">
               <h2 className="text-2xl font-bold text-gray-900 mb-6">
                 {clienteSelecionado ? `Recorrência para ${clienteSelecionado.name}` : 'Nova Recorrência'}
               </h2>
@@ -210,6 +245,7 @@ export default function RecorrenciasPage() {
                     onChange={(e) => handleSelectCliente(e.target.value)}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg"
                     required
+                    disabled={creating}
                   >
                     <option value="">Selecione um cliente</option>
                     {clientes.map((cliente) => (
@@ -228,6 +264,7 @@ export default function RecorrenciasPage() {
                     onChange={(e) => setFormData({ ...formData, descricao: e.target.value })}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg"
                     required
+                    disabled={creating}
                   />
                 </div>
 
@@ -240,6 +277,7 @@ export default function RecorrenciasPage() {
                     onChange={(e) => setFormData({ ...formData, valor: e.target.value })}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg"
                     required
+                    disabled={creating}
                   />
                 </div>
 
@@ -250,6 +288,7 @@ export default function RecorrenciasPage() {
                     onChange={(e) => setFormData({ ...formData, periodicidade: e.target.value })}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg"
                     required
+                    disabled={creating}
                   >
                     <option value="SEMANAL">Semanal</option>
                     <option value="MENSAL">Mensal</option>
@@ -266,6 +305,7 @@ export default function RecorrenciasPage() {
                     onChange={(e) => setFormData({ ...formData, jornada: e.target.value })}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg"
                     required
+                    disabled={creating}
                   >
                     <option value="jornada2">Jornada 2 - Apenas QR Code (Autorização)</option>
                     <option value="jornada3">Jornada 3 - QR Code + Pagamento Inicial</option>
@@ -281,19 +321,39 @@ export default function RecorrenciasPage() {
                   </div>
                 )}
 
+                {formData.jornada === 'jornada4' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Data de Vencimento (opcional)
+                    </label>
+                    <input
+                      type="date"
+                      value={formData.dataVencimento}
+                      onChange={(e) => setFormData({ ...formData, dataVencimento: e.target.value })}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg"
+                      disabled={creating}
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Se não informado, será 30 dias após a data inicial
+                    </p>
+                  </div>
+                )}
+
                 <div className="flex justify-end gap-4 pt-4">
                   <button
                     type="button"
                     onClick={() => setShowModal(false)}
                     className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
+                    disabled={creating}
                   >
                     Cancelar
                   </button>
                   <button
                     type="submit"
-                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:bg-gray-400"
+                    disabled={creating}
                   >
-                    Criar Recorrência
+                    {creating ? 'Criando...' : 'Criar Recorrência'}
                   </button>
                 </div>
               </form>
